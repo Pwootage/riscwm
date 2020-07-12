@@ -1,7 +1,7 @@
 package com.pwootage.riscwm.CPU
 
 inline class RiscVInstruction(val instr: Int) {
-    inline fun bits(start: Int, end: Int = start): Int {
+    fun bits(start: Int, end: Int = start): Int {
         require(start <= end ) { "Start must be before end" }
         return (instr shr start) and mask(end - start + 1)
     }
@@ -19,10 +19,10 @@ inline class RiscVInstruction(val instr: Int) {
     val rs2: Int get() = bits(20, 24)
     val funct7: Int get() = bits(25, 31)
     // All immediates sign extend from bit 31 - so not all of these use bits
-    // Sign extension: (n, 31) >> n << dest = (n, 31) >> (n - dest)
-    val immed_i: Int get() = instr shr (20 - 0)
-    val immed_s: Int get() = bits(7, 11) or (instr shr (25 - 5))
-    val immed_b: Int get() = (bits(8, 11) shl 1) or (bits(25, 30) shl 5) or (bits(7) shl 11) or (instr shr (31 - 12))
+    // Sign extension: (n, 31) >> n << dest
+    val immed_i: Int get() = (instr shr 20) shl 0
+    val immed_s: Int get() = bits(7, 11) or ((instr shr 25) shl 5)
+    val immed_b: Int get() = (bits(8, 11) shl 1) or (bits(25, 30) shl 5) or (bits(7) shl 11) or ((instr shr 31) shl 12)
     val immed_u: Int get() = instr and 0b11111111_11111111_11110000_00000000u.toInt()
-    val immed_j: Int get() = (bits(21, 30) shl 1) or (bits(20) shl 11) or (bits(12, 19) shl 12) or (instr shl (31 - 20))
+    val immed_j: Int get() = (bits(21, 30) shl 1) or (bits(20) shl 11) or (bits(12, 19) shl 12) or ((instr shr 31) shl 20)
 }

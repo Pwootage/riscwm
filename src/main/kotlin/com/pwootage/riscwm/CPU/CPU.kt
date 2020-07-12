@@ -5,7 +5,8 @@ import com.pwootage.riscwm.memory.MMU
 
 class CPU(val mmu: MMU) {
     val x: Array<Int> = Array(32) { 0 }
-    val pc: UInt = 0x8000_0000u
+    val f: Array<Float> = Array(32) { 0f }
+    var pc: UInt = 0x8000_0000u
 
 
     fun cycle() {
