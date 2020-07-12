@@ -25,4 +25,8 @@ inline class RiscVInstruction(val instr: Int) {
     val immed_b: Int get() = (bits(8, 11) shl 1) or (bits(25, 30) shl 5) or (bits(7) shl 11) or ((instr shr 31) shl 12)
     val immed_u: Int get() = instr and 0b11111111_11111111_11110000_00000000u.toInt()
     val immed_j: Int get() = (bits(21, 30) shl 1) or (bits(20) shl 11) or (bits(12, 19) shl 12) or ((instr shr 31) shl 20)
+    // FP
+    val funct5: Int get() = bits(27, 31)
+    val fmt: Int get() = bits(25, 26)
+    val rm: Int get() = bits(12, 14)
 }

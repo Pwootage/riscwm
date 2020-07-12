@@ -2,7 +2,12 @@ package com.pwootage.riscwm.CPU.instr
 
 import com.pwootage.riscwm.CPU.CPU
 import com.pwootage.riscwm.CPU.RiscVInstruction
+import java.lang.Float.min
 import java.lang.IllegalStateException
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.sqrt
+import kotlin.math.withSign
 
 object OPCODES {
     val OP_IMM = 0b0010011
@@ -96,7 +101,73 @@ object OPCODES {
         val ECALL = 0b000000000000
         val EBREAK = 0b000000000001
     }
+
+    val LOAD_FP = 0b0000111
+
+    object LOAD_FP_FUNCT3 {
+        val LOAD_FLOAT = 0b010
+        val LOAD_DOUBLE = 0b011
+    }
+
+    val STORE_FP = 0b0100111
+
+    object STORE_FP_FUNCT3 {
+        val STORE_FLOAT = 0b010
+        val STORE_DOUBLE = 0b011
+    }
+
+    val OP_FP = 0b1000011
+
+    object OP_FP_FUNCT5 {
+        val FADD = 0b0000000
+        val FSUB = 0b0000100
+        val FMUL = 0b0001000
+        val FDIV = 0b0001100
+        val FSQRT = 0b0101100
+        val FMIN_MAX = 0b0010100
+        val FCVT_W_S = 0b1100000
+        val FCVT_S_W = 0b1101000
+        val FSGNJ = 0b0010000
+        val FMV_X_W = 0b1110000
+        val FMV_W_X = 0b1111000
+        val FCMP = 0b1010000
+        val FCLASS = 0b1110000
+    }
+
+    object OP_FP_FMT {
+        val FLOAT = 0b010
+        val DOUBLE = 0b011
+    }
+
+    object OP_FP_MIN_MAX_RM {
+        val MIN = 0b000
+        val MAX = 0b001
+    }
+
+    object OP_FP_CVT_MODE {
+        val W = 0b00000
+        val WU = 0b00001
+    }
+
+    object OP_FP_FSGNJ_FUNCT3 {
+        val FSGNJ_S = 0b000
+        val FSGNJN_S = 0b001
+        val FSGNJX_S = 0b010
+    }
+
+    object OP_FP_FCMP_FUNCT3 {
+        val FEQ = 0b010
+        val FLT = 0b001
+        val FLE = 0b000
+    }
+
+    object OP_FP_FMV_X_W_FUNCT3 {
+        val FMV_X_V = 0b000
+        val FCLASS = 0b001
+    }
 }
+
+val CANONICAL_NAN = Float.NaN
 
 inline fun RiscVInstruction.exec(cpu: CPU) {
     when (opcode) {
@@ -111,6 +182,9 @@ inline fun RiscVInstruction.exec(cpu: CPU) {
         OPCODES.STORE -> store(cpu)
         OPCODES.MISC_MEM -> misc_mem(cpu)
         OPCODES.SYSTEM -> system(cpu)
+        OPCODES.LOAD_FP -> load_fp(cpu)
+        OPCODES.STORE_FP -> store_fp(cpu)
+        OPCODES.OP_FP -> op_fp(cpu)
         // TODO: throw interrupt instead
         else -> throw IllegalStateException("Invalid opcode")
     }
@@ -137,16 +211,16 @@ inline fun RiscVInstruction.op_imm(cpu: CPU) {
         }
         else -> throw IllegalStateException("Impossible funct3")
     }
-    cpu.setRd(rd, res)
+    cpu.setx(rd, res)
 }
 
 inline fun RiscVInstruction.lui(cpu: CPU) {
-    cpu.setRd(rd, immed_u)
+    cpu.setx(rd, immed_u)
 }
 
 inline fun RiscVInstruction.auipc(cpu: CPU) {
     // PC is still equal to this instruction
-    cpu.setRd(rd, immed_u + cpu.pc.toInt())
+    cpu.setx(rd, immed_u + cpu.pc.toInt())
 }
 
 inline fun RiscVInstruction.op(cpu: CPU) {
@@ -207,7 +281,7 @@ inline fun RiscVInstruction.op(cpu: CPU) {
             else -> throw IllegalStateException("Impossible op funct3")
         }
     }
-    cpu.setRd(rd, res)
+    cpu.setx(rd, res)
 }
 
 inline fun RiscVInstruction.jal(cpu: CPU) {
@@ -215,7 +289,7 @@ inline fun RiscVInstruction.jal(cpu: CPU) {
     val oldPC = cpu.pc
     val newPC = oldPC.toInt() + immed_j
     cpu.pc = newPC.toUInt()
-    cpu.setRd(rd, oldPC.toInt() + 4)
+    cpu.setx(rd, oldPC.toInt() + 4)
 }
 
 inline fun RiscVInstruction.jalr(cpu: CPU) {
@@ -223,7 +297,7 @@ inline fun RiscVInstruction.jalr(cpu: CPU) {
     val oldPC = cpu.pc
     val newPC = (cpu.x[rs1] + immed_i) and 0b1.inv()
     cpu.pc = newPC.toUInt()
-    cpu.setRd(rd, oldPC.toInt() + 4)
+    cpu.setx(rd, oldPC.toInt() + 4)
 }
 
 inline fun RiscVInstruction.b(cpu: CPU) {
@@ -245,6 +319,7 @@ inline fun RiscVInstruction.b(cpu: CPU) {
 }
 
 inline fun RiscVInstruction.load(cpu: CPU) {
+    // Can't optimize x0 out, since it still will read the memory; this means it can have side effects for MMIO
     val addr = (cpu.x[rs1] + immed_i).toUInt()
     val v: Int = when (funct3) {
         OPCODES.LOAD_FUNCT3.LW -> cpu.mmu.read32(addr)
@@ -254,6 +329,7 @@ inline fun RiscVInstruction.load(cpu: CPU) {
         OPCODES.LOAD_FUNCT3.LHU -> cpu.mmu.read16(addr).toInt() and 0xFFFF
         else -> throw IllegalStateException("Invalid load funct3") // TODO: CPU exception
     }
+    cpu.setx(rd, v)
 }
 
 inline fun RiscVInstruction.store(cpu: CPU) {
@@ -290,5 +366,134 @@ inline fun RiscVInstruction.system(cpu: CPU) {
             //noop, for now. Might be needed for debugger.
         }
         else -> throw IllegalStateException("Invalid memory funct3") // TODO: CPU exception
+    }
+}
+
+inline fun RiscVInstruction.load_fp(cpu: CPU) {
+    val addr = (cpu.x[rs1] + immed_i).toUInt()
+    when (funct3) {
+        OPCODES.LOAD_FP_FUNCT3.LOAD_FLOAT -> {
+            val v = cpu.mmu.read32(addr).toLong()
+            cpu.d[rd] = v or 0xFFFF_FFFF_0000_0000UL.toLong()
+        }
+        OPCODES.LOAD_FP_FUNCT3.LOAD_DOUBLE -> {
+            val v = cpu.mmu.read64(addr)
+            cpu.d[rd] = v
+        }
+        else -> throw IllegalStateException("Invalid memory funct3") // TODO: CPU exception
+    }
+}
+
+inline fun RiscVInstruction.store_fp(cpu: CPU) {
+    val addr = (cpu.x[rs1] + immed_s).toUInt()
+    when (funct3) {
+        OPCODES.STORE_FP_FUNCT3.STORE_FLOAT -> {
+            val v: Int = cpu.d[rs2].toInt()
+            cpu.mmu.write32(addr, v)
+        }
+        OPCODES.STORE_FP_FUNCT3.STORE_DOUBLE -> {
+            val v = cpu.d[rs2]
+            cpu.mmu.write64(addr, v)
+        }
+        else -> throw IllegalStateException("Invalid memory funct3") // TODO: CPU exception
+    }
+}
+
+inline fun RiscVInstruction.op_fp(cpu: CPU) {
+    if (fmt == OPCODES.OP_FP_FMT.FLOAT) {
+        val src1 = cpu.getf(rs1)
+        val src2 = cpu.getf(rs2)
+        when (funct5) {
+            // TODO: rounding mode, flags
+            OPCODES.OP_FP_FUNCT5.FADD -> cpu.setf(rd, src2 + src2)
+            OPCODES.OP_FP_FUNCT5.FSUB -> cpu.setf(rd, src1 - src2)
+            OPCODES.OP_FP_FUNCT5.FMUL -> cpu.setf(rd, src1 * src2)
+            OPCODES.OP_FP_FUNCT5.FDIV -> cpu.setf(rd, src1 / src2)
+            OPCODES.OP_FP_FUNCT5.FSQRT -> cpu.setf(rd, sqrt(src1.toDouble()).toFloat())
+            OPCODES.OP_FP_FUNCT5.FMIN_MAX -> cpu.setf(
+                rd, when (rm) {
+                    OPCODES.OP_FP_MIN_MAX_RM.MIN -> min(src1, src2) // This should be correct for nan handling, I think
+                    OPCODES.OP_FP_MIN_MAX_RM.MAX -> max(src1, src2)
+                    else -> throw IllegalStateException("Invalid minmax mode") // TODO: CPU exception
+                }
+            )
+            // TODO: flags, possibly missing edge cases
+            OPCODES.OP_FP_FUNCT5.FCVT_W_S -> cpu.setx(
+                rd, when (rs2) {
+                    OPCODES.OP_FP_CVT_MODE.W -> src1.toInt()
+                    OPCODES.OP_FP_CVT_MODE.WU -> src1.toUInt().toInt()
+                    else -> throw IllegalStateException("Invalid convert mode") // TODO: CPU exception
+                }
+            )
+            OPCODES.OP_FP_FUNCT5.FCVT_S_W -> cpu.setf(
+                rd, when (rs2) {
+                    OPCODES.OP_FP_CVT_MODE.W -> cpu.x[rs1].toFloat()
+                    OPCODES.OP_FP_CVT_MODE.WU -> cpu.x[rs1].toUInt().toFloat()
+                    else -> throw IllegalStateException("Invalid convert mode") // TODO: CPU exception
+                }
+            )
+            OPCODES.OP_FP_FUNCT5.FSGNJ -> cpu.setf(
+                rd, when (funct3) {
+                    OPCODES.OP_FP_FSGNJ_FUNCT3.FSGNJ_S -> src1.withSign(src2)
+                    OPCODES.OP_FP_FSGNJ_FUNCT3.FSGNJN_S -> src1.withSign(-src2)
+                    OPCODES.OP_FP_FSGNJ_FUNCT3.FSGNJX_S -> src1.withSign(src1 * src2)
+                    else -> throw IllegalStateException("Invalid sign injection mode") // TODO: CPU exception
+                }
+            )
+            OPCODES.OP_FP_FUNCT5.FMV_W_X -> cpu.d[rd] = cpu.x[rs1].toLong() or 0xFFFF_FFFF_0000_0000u.toLong()
+            OPCODES.OP_FP_FUNCT5.FMV_X_W, OPCODES.OP_FP_FUNCT5.FCLASS -> cpu.setx(rd, when(funct3) {
+                OPCODES.OP_FP_FMV_X_W_FUNCT3.FMV_X_V -> cpu.d[rs1].toInt()
+                OPCODES.OP_FP_FMV_X_W_FUNCT3.FCLASS -> {
+                    var clazz = 0
+                    if (src1.isInfinite() && src1 < 0) {
+                        clazz = clazz or 0b00_0000_0001
+                    }
+                    if (src1 < 0) {
+                        clazz = clazz or 0b00_0000_0010
+                    }
+                    // I have no idea what subnormal means
+                    //if (src1.isNegativeSubnormal()) {
+                    //    clazz = clazz or 0b00_0000_0100
+                    //}
+                    if (src1.toBits() == 0x8000_0000u.toInt()) {
+                        clazz = clazz or 0b00_0000_1000
+                    }
+                    if (src1.toBits() == 0) {
+                        clazz = clazz or 0b00_0001_0000
+                    }
+                    // I have no idea what subnormal means
+                    //if (src1.isPositiveSubnormal()) {
+                    //    clazz = clazz or 0b00_0010_0000
+                    //}
+                    if (src1 > 0) {
+                        clazz = clazz or 0b00_0100_0000
+                    }
+                    if (src1.isInfinite() && src1 > 0) {
+                        clazz = clazz or 0b00_1000_0000
+                    }
+                    if (src1.toBits() == CANONICAL_NAN.toBits()) {
+                        clazz = clazz or 0b01_0000_0000
+                    }
+                    if (src1.isNaN() && src1.toBits() != CANONICAL_NAN.toBits()) {
+                        clazz = clazz or 0b10_0000_0000
+                    }
+                    clazz
+                }
+                else -> throw IllegalStateException("Invalid FMV/FCLASS mode") // TODO: CPU exception
+            })
+            OPCODES.OP_FP_FUNCT5.FCMP -> cpu.setx(
+                rd, if (when (funct3) {
+                        OPCODES.OP_FP_FCMP_FUNCT3.FEQ -> src1 == src2
+                        OPCODES.OP_FP_FCMP_FUNCT3.FLE -> src1 <= src2
+                        OPCODES.OP_FP_FCMP_FUNCT3.FLT -> src1 < src2
+                        else -> throw IllegalStateException("Invalid float comparison") // TODO: CPU exception
+                    }
+                ) 1 else 0
+            )
+            else -> throw IllegalStateException("Invalid memory funct3") // TODO: CPU exception
+        }
+    } else {
+        // TODO: double
+        throw IllegalStateException("Double not yet supported") // TODO: CPU exception
     }
 }
